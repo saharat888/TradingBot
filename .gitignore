@@ -1,0 +1,19 @@
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Node modules
+node_modules/
+**/node_modules/
+
+# Build artifacts
+**/build/
+*.node
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local

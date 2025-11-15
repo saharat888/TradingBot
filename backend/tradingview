@@ -1,0 +1,401 @@
+//@version=5
+strategy('Test V3 Tl สมบูรณ์',
+     overlay=true,
+     initial_capital=10,
+     default_qty_type=strategy.cash,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.1)
+
+// ====== ENHANCED VERSION with Market Regime Detection ======
+// ====== Auto-detects: Uptrend, Downtrend, Sideways ======
+// ====== Adapts strategy parameters based on market condition ======
+
+// =====================================================================================================
+// ──────────────── MARKET REGIME DETECTION ────────────────
+// =====================================================================================================
+grpRegime = "Market Regime Detection"
+useRegimeDetection = input.bool(true, "เปิดใช้งานตรวจจับสภาวะตลาด", group=grpRegime,
+     tooltip="ระบบจะตรวจจับสภาวะตลาดอัตโนมัติและปรับกลยุทธ์")
+
+// ADX Settings
+adxLength = input.int(14, "ADX Length", minval=1, group=grpRegime)
+adxThreshold = input.float(25, "ADX Threshold (Trending)", minval=10, maxval=50, step=1, group=grpRegime,
+     tooltip="ADX > threshold = Trending, ADX < threshold = Sideways")
+
+// Trend Detection Method
+trendMethod = input.string("EMA Crossover", "วิธีตรวจจับเทรนด์", 
+     options=["EMA Crossover", "ADX DI", "Price vs MA"], group=grpRegime)
+
+// EMA for Trend Detection
+fastEma = input.int(20, "Fast EMA", minval=1, group=grpRegime)
+slowEma = input.int(50, "Slow EMA", minval=1, group=grpRegime)
+
+// Sideways Detection
+sidewaysMultiplier = input.float(1.5, "Sideways Detection Multiplier", minval=1, maxval=3, step=0.1, group=grpRegime,
+     tooltip="ยิ่งสูง = ยิ่งเข้มงวดในการระบุ Sideways")
+
+// Visual Options
+showRegimeLabel = input.bool(true, "แสดงป้ายสภาวะตลาด", group=grpRegime)
+showRegimeBackground = input.bool(true, "แสดงพื้นหลังตามสภาวะตลาด", group=grpRegime)
+
+// === Calculate ADX ===
+[diPlus, diMinus, adx] = ta.dmi(adxLength, adxLength)
+
+// === Calculate EMAs ===
+emaFast = ta.ema(close, fastEma)
+emaSlow = ta.ema(close, slowEma)
+
+// === Determine Market Regime ===
+// 1. Check if market is Trending or Sideways (using ADX)
+isTrending = adx > adxThreshold
+isSideways = adx <= adxThreshold
+
+// 2. Determine Trend Direction
+var string marketRegime = "SIDEWAYS"
+
+if useRegimeDetection
+    if isTrending
+        if trendMethod == "EMA Crossover"
+            marketRegime := emaFast > emaSlow ? "UPTREND" : "DOWNTREND"
+        else if trendMethod == "ADX DI"
+            marketRegime := diPlus > diMinus ? "UPTREND" : "DOWNTREND"
+        else if trendMethod == "Price vs MA"
+            marketRegime := close > emaSlow ? "UPTREND" : "DOWNTREND"
+    else
+        marketRegime := "SIDEWAYS"
+else
+    marketRegime := "NORMAL"  // ไม่ใช้ระบบตรวจจับ
+
+// === Visual Indicators ===
+// Background Color
+bgColor = showRegimeBackground ? 
+     (marketRegime == "UPTREND" ? color.new(color.green, 95) : 
+      marketRegime == "DOWNTREND" ? color.new(color.red, 95) : 
+      marketRegime == "SIDEWAYS" ? color.new(color.yellow, 95) : na) : na
+bgcolor(bgColor)
+
+// Regime Label
+if showRegimeLabel and barstate.islast
+    regimeText = marketRegime + "\nADX: " + str.tostring(adx, "#.#")
+    regimeColor = marketRegime == "UPTREND" ? color.green : 
+                  marketRegime == "DOWNTREND" ? color.red : 
+                  color.orange
+    label.new(bar_index, high, regimeText, 
+         style=label.style_label_left, 
+         color=regimeColor, 
+         textcolor=color.white, 
+         size=size.large)
+
+// Plot EMAs for reference
+plot(useRegimeDetection ? emaFast : na, "Fast EMA", color=color.new(color.blue, 50), linewidth=1)
+plot(useRegimeDetection ? emaSlow : na, "Slow EMA", color=color.new(color.orange, 50), linewidth=2)
+
+// =====================================================================================================
+// ──────────────── ADAPTIVE STRATEGY PARAMETERS ────────────────
+// =====================================================================================================
+grpAdaptive = "Adaptive Parameters"
+useAdaptiveParams = input.bool(true, "ใช้พารามิเตอร์แบบปรับตัว", group=grpAdaptive,
+     tooltip="ปรับค่า Key Value และ ATR Period ตามสภาวะตลาด")
+
+// Parameters for Each Regime
+// TRENDING (ใช้ค่าที่ไวกว่า จับเทรนด์ได้เร็ว)
+trendingKeyValue = input.float(3.0, "Key Value (Trending)", step=0.25, group=grpAdaptive)
+trendingAtrPeriod = input.int(10, "ATR Period (Trending)", minval=1, group=grpAdaptive)
+
+// SIDEWAYS (ใช้ค่าที่ช้ากว่า กรองสัญญาณรบกวน)
+sidewaysKeyValue = input.float(4.0, "Key Value (Sideways)", step=0.25, group=grpAdaptive)
+sidewaysAtrPeriod = input.int(14, "ATR Period (Sideways)", minval=1, group=grpAdaptive)
+
+// Trading Rules per Regime
+tradeTrending = input.bool(true, "เทรดในสภาวะ Trending", group=grpAdaptive)
+tradeSideways = input.bool(false, "เทรดในสภาวะ Sideways", group=grpAdaptive,
+     tooltip="แนะนำ: ปิดหรือใช้พารามิเตอร์รัดกุม เพราะ Sideways มักให้สัญญาณเท็จ")
+
+// === Apply Adaptive Parameters ===
+a = useAdaptiveParams ? 
+     (marketRegime == "SIDEWAYS" ? sidewaysKeyValue : trendingKeyValue) : 
+     input.float(3.25, title="Key Value (Manual)", step=0.25)
+
+// Manual ATR Period (when adaptive is OFF)
+manualAtrPeriod = input.int(10, title="ATR Period (Manual)")
+
+// ⚠️ FIX: Calculate ATR for each period separately (Pine v5 requires simple int)
+xATR_trending = ta.atr(trendingAtrPeriod)
+xATR_sideways = ta.atr(sidewaysAtrPeriod)
+xATR_manual = ta.atr(manualAtrPeriod)
+
+// Select the appropriate ATR based on current regime
+xATR_selected = useAdaptiveParams ? 
+     (marketRegime == "SIDEWAYS" ? xATR_sideways : xATR_trending) : 
+     xATR_manual
+
+// ====== Check if trading is allowed in current regime ======
+allowTrade = (marketRegime == "UPTREND" or marketRegime == "DOWNTREND") ? tradeTrending : 
+             (marketRegime == "SIDEWAYS" ? tradeSideways : true)
+
+// -------- Filters: Date Range --------
+usefromDate = input.bool(defval=true,  title='From', inline="From Date", group="Filters")
+fromDate    = input.time(defval=timestamp('01 Jan 2025 00:00 UTC'), title='', inline="From Date", group='Filters')
+usetoDate   = input.bool(defval=false, title='To ', inline="To Date",  group="Filters")
+toDate      = input.time(defval=timestamp('31 Dec 2025 23:59 UTC'),   title='', inline="To Date",  group="Filters")
+
+inRange = (usefromDate ? time >= fromDate : true) and (usetoDate ? time <= toDate : true)
+
+// -------- Other Inputs --------
+h = input.bool(false, title="Signals from Heikin Ashi Candles", group="Core Settings")
+
+// -------- TP / SL (separate toggles) --------
+groupTPSL = "Take Profit / Stop Loss"
+useTP = input.bool(false,  "Use TP", inline="TP", group=groupTPSL)
+tpPct = input.float(2.0,  "TP %",   inline="TP", group=groupTPSL, step=0.1, minval=0)/100.0
+
+useSL = input.bool(false,  "Use SL", inline="SL", group=groupTPSL)
+slPct = input.float(1.0,  "SL %",   inline="SL", group=groupTPSL, step=0.1, minval=0)/100.0
+
+// ======== TRAILING STOP (ล็อกกำไร) ========
+groupTrailing = "Trailing Stop (Lock Profit)"
+useTrailingLong = input.bool(false, "เปิดใช้ Trailing Stop สำหรับ Long", group=groupTrailing, 
+     tooltip="ปิด Long อัตโนมัติเมื่อราคาถอยจากจุดสูงสุด")
+trailingPctLong = input.float(1.5, "Trailing Stop % (Long)", group=groupTrailing, step=0.1, minval=0.1) / 100.0
+trailingActivationLong = input.float(0.5, "เริ่ม Trailing เมื่อกำไร % (Long)", group=groupTrailing, step=0.1, minval=0) / 100.0
+
+useTrailingShort = input.bool(false, "เปิดใช้ Trailing Stop สำหรับ Short", group=groupTrailing,
+     tooltip="ปิด Short อัตโนมัติเมื่อราคาวิ่งจากจุดต่ำสุด")
+trailingPctShort = input.float(1.5, "Trailing Stop % (Short)", group=groupTrailing, step=0.1, minval=0.1) / 100.0
+trailingActivationShort = input.float(0.5, "เริ่ม Trailing เมื่อกำไร % (Short)", group=groupTrailing, step=0.1, minval=0) / 100.0
+
+showTrailingLines = input.bool(true, "แสดงเส้น Trailing Stop บนชาร์ต", group=groupTrailing)
+
+// === Money Management ===
+initial_capital        = input.float(15,     title = "Initial Capital (USDT)", minval = 1,   group = "Money Management")
+qty_per_trade          = input.float(10,     title = "Quantity Per Trade (USDT)", minval = 0.1, group = "Money Management")
+use_percentage         = input.bool(false,   title = "Use % of Equity", group = "Money Management")
+percentage_per_trade   = input.float(66.67,  title = "Percentage Per Trade (%)", minval = 1, maxval = 100, group = "Money Management")
+
+// === Position Size ===
+position_size = use_percentage ? (strategy.equity * percentage_per_trade / 100) / close : qty_per_trade / close
+
+// =====================================================================================================
+// ──────────────── CORE TRADING LOGIC (ATR Trailing Stop) ────────────────
+// =====================================================================================================
+
+// -------- Core Logic --------
+xATR  = xATR_selected  // ใช้ ATR ที่เลือกไว้แล้ว
+nLoss = a * xATR
+
+src = h ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=barmerge.lookahead_off) : close
+
+var float xATRTrailingStop = na
+iff_1 = src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
+iff_2 = src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ? math.min(nz(xATRTrailingStop[1]), src + nLoss) : iff_1
+xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ? math.max(nz(xATRTrailingStop[1]), src - nLoss) : iff_2
+
+pos = 0
+iff_3 = src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : nz(pos[1], 0)
+pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 : iff_3
+
+ema   = ta.ema(src, 1)
+above = ta.crossover(ema, xATRTrailingStop)
+below = ta.crossover(xATRTrailingStop, ema)
+
+buy  = src > xATRTrailingStop and above
+sell = src < xATRTrailingStop and below
+
+barbuy  = src > xATRTrailingStop
+barsell = src < xATRTrailingStop
+
+// ===== ATR Trend Line (GREEN up / RED down) =====
+atrTrendColor = src >= xATRTrailingStop ? color.new(color.lime, 0) : color.new(color.red, 0)
+plot(xATRTrailingStop, title='ATR Trend', color=atrTrendColor, linewidth=2)
+
+// -------- Plots (signals & bars) --------
+plotshape(buy and allowTrade,  title='Buy',  text='Buy',  style=shape.labelup,   location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+plotshape(sell and allowTrade, title='Sell', text='Sell', style=shape.labeldown, location=location.abovebar, color=color.new(color.red,   0), textcolor=color.white, size=size.tiny)
+barcolor(barbuy ? color.new(color.green, 0) : barsell ? color.new(color.red, 0) : na)
+
+// -------- Entries (respect date filter AND regime filter) --------
+if inRange and buy and allowTrade
+    strategy.entry('Long', strategy.long,  qty = position_size)
+if inRange and sell and allowTrade
+    strategy.entry('Short', strategy.short,  qty = position_size)
+
+// ======== TRAILING STOP LOGIC ========
+var float longHighest = na
+var float shortLowest = na
+
+// Long Position
+if strategy.position_size > 0
+    activationPrice = strategy.position_avg_price * (1 + trailingActivationLong)
+    if high >= activationPrice
+        longHighest := na(longHighest) ? high : math.max(longHighest, high)
+    shortLowest := na
+    
+// Short Position    
+else if strategy.position_size < 0
+    activationPrice = strategy.position_avg_price * (1 - trailingActivationShort)
+    if low <= activationPrice
+        shortLowest := na(shortLowest) ? low : math.min(shortLowest, low)
+    longHighest := na
+    
+// No Position
+else
+    longHighest := na
+    shortLowest := na
+
+// คำนวณ Trailing Stop Level
+longTrailingStop = not na(longHighest) ? longHighest * (1 - trailingPctLong) : na
+shortTrailingStop = not na(shortLowest) ? shortLowest * (1 + trailingPctShort) : na
+
+// ตรวจสอบว่า Trailing Stop อยู่ในตำแหน่งที่ถูกต้อง
+if not na(longTrailingStop) and longTrailingStop <= strategy.position_avg_price
+    longTrailingStop := na
+if not na(shortTrailingStop) and shortTrailingStop >= strategy.position_avg_price
+    shortTrailingStop := na
+
+// ตรวจจับ Trailing Stop Hit
+longTrailingHit = strategy.position_size > 0 and useTrailingLong and not na(longTrailingStop) and close < longTrailingStop
+shortTrailingHit = strategy.position_size < 0 and useTrailingShort and not na(shortTrailingStop) and close > shortTrailingStop
+
+// ปิด Position เมื่อแตะ Trailing Stop
+if longTrailingHit
+    strategy.close("Long", comment="Trailing Stop Long")
+if shortTrailingHit
+    strategy.close("Short", comment="Trailing Stop Short")
+
+// Plot Trailing Stop Lines
+plot(showTrailingLines and strategy.position_size > 0 and useTrailingLong ? longTrailingStop : na, 
+     "Long Trailing Stop", color=color.new(color.orange, 30), linewidth=2, style=plot.style_linebr)
+plot(showTrailingLines and strategy.position_size < 0 and useTrailingShort ? shortTrailingStop : na, 
+     "Short Trailing Stop", color=color.new(color.orange, 30), linewidth=2, style=plot.style_linebr)
+
+// -------- TP/SL Calculation --------
+longTP  = strategy.position_size > 0 and useTP ? strategy.position_avg_price * (1 + tpPct) : na
+longSL  = strategy.position_size > 0 and useSL ? strategy.position_avg_price * (1 - slPct) : na
+shortTP = strategy.position_size < 0 and useTP ? strategy.position_avg_price * (1 - tpPct) : na
+shortSL = strategy.position_size < 0 and useSL ? strategy.position_avg_price * (1 + slPct) : na
+
+// -------- ตรวจจับ TP/SL Hits (ประกาศก่อนใช้งาน) --------
+longTPHit  = not na(longTP) and high >= longTP
+longSLHit  = not na(longSL) and low <= longSL
+shortTPHit = not na(shortTP) and low <= shortTP
+shortSLHit = not na(shortSL) and high >= shortSL
+
+// -------- Exits: ให้ Strategy ทำงานตาม Webhook Signals --------
+// ปิด Long Position
+if strategy.position_size > 0
+    // ปิดเมื่อแตะ TP
+    if useTP and longTPHit
+        strategy.close("Long", comment="TP Hit")
+        label.new(bar_index, high, "🎯 TP Hit", style=label.style_label_down, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    // ปิดเมื่อแตะ SL
+    else if useSL and longSLHit
+        strategy.close("Long", comment="SL Hit")
+        label.new(bar_index, low, "🛑 SL Hit", style=label.style_label_up, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// ปิด Short Position  
+if strategy.position_size < 0
+    // ปิดเมื่อแตะ TP
+    if useTP and shortTPHit
+        strategy.close("Short", comment="TP Hit")
+        label.new(bar_index, low, "🎯 TP Hit", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    // ปิดเมื่อแตะ SL
+    else if useSL and shortSLHit
+        strategy.close("Short", comment="SL Hit")
+        label.new(bar_index, high, "🛑 SL Hit", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// -------- Plot TP/SL Lines --------
+plot(useTP ? longTP  : na, 'Long TP',  color=color.new(color.lime, 40), style=plot.style_linebr)
+plot(useSL ? longSL  : na, 'Long SL',  color=color.new(color.red,  40), style=plot.style_linebr)
+plot(useTP ? shortTP : na, 'Short TP', color=color.new(color.lime, 40), style=plot.style_linebr)
+plot(useSL ? shortSL : na, 'Short SL', color=color.new(color.red,  40), style=plot.style_linebr)
+
+// =====================================================================================================
+// ──────────────── Trading Bot Webhook (รองรับ Long/Short) ────────────────
+// =====================================================================================================
+grpW = "Trading Bot Webhook"
+useWH = input.bool(false, "เปิดใช้งาน Webhook", group=grpW, 
+     tooltip="ตั้ง Alert = Any alert() function call และใส่ Webhook URL จากระบบ Trading Bot")
+
+botId  = input.int(0, "Bot ID", group=grpW, tooltip="Bot ID จากระบบ Trading Bot")
+botToken  = input.string("", "Bot Token", group=grpW, tooltip="Token สำหรับยืนยันตัวตน")
+
+autoCloseOnTP = input.bool(false, "Auto CLOSE เมื่อแตะ TP", group=grpW)
+autoCloseOnSL = input.bool(false, "Auto CLOSE เมื่อแตะ SL", group=grpW)
+autoCloseOnTrailing = input.bool(true, "Auto CLOSE เมื่อแตะ Trailing Stop", group=grpW)
+
+showWebhookSignals = input.bool(true, "แสดงสัญญาณ Webhook บนชาร์ต", group=grpW)
+
+// JSON helpers
+json_signal(action, pair, price, token) =>
+    '{ "action":"' + action + '", "pair":"' + pair + '", "price":"' + str.tostring(price) + '", "token":"' + token + '" }'
+
+whReady() =>
+    useWH and botId > 0 and str.length(botToken) > 0
+
+// State tracking สำหรับป้องกันสัญญาณซ้ำ
+var string lastSignal = ""
+var int lastSignalBar = 0
+
+// Reset lastSignal เมื่อไม่มี position (เพื่อให้สามารถเปิด position ใหม่ได้)
+if strategy.position_size == 0 and lastSignal != ""
+    lastSignal := ""
+
+// Get current symbol
+currentPair = str.replace(str.replace(syminfo.tickerid, "BINANCE:", ""), ".P", "")
+
+// Fire webhook alerts
+if barstate.isconfirmed and whReady()
+    
+    // ⭐ ส่งสัญญาณ CLOSE เมื่อแตะ Trailing Stop (ลำดับแรก)
+    if autoCloseOnTrailing and (longTrailingHit or shortTrailingHit)
+        if lastSignal != "CLOSE_TRAIL" or bar_index != lastSignalBar
+            alert(json_signal("CLOSE", currentPair, "market", botToken), alert.freq_once_per_bar_close)
+            lastSignal := "CLOSE_TRAIL"
+            lastSignalBar := bar_index
+            if showWebhookSignals
+                trailLabel = longTrailingHit ? "🔸 Trail CLOSE Long" : "🔸 Trail CLOSE Short"
+                labelY = longTrailingHit ? high : low
+                labelStyle = longTrailingHit ? label.style_label_down : label.style_label_up
+                label.new(bar_index, labelY, trailLabel, style=labelStyle, color=color.orange, textcolor=color.white, size=size.small)
+    
+    // ส่งสัญญาณ CLOSE เมื่อแตะ TP
+    else if autoCloseOnTP and (longTPHit or shortTPHit)
+        if lastSignal != "CLOSE_TP" or bar_index != lastSignalBar
+            alert(json_signal("CLOSE", currentPair, "market", botToken), alert.freq_once_per_bar_close)
+            lastSignal := "CLOSE_TP"
+            lastSignalBar := bar_index
+            if showWebhookSignals
+                label.new(bar_index, high, "🎯 TP CLOSE", style=label.style_label_down, color=color.orange, textcolor=color.white, size=size.small)
+
+    // ส่งสัญญาณ CLOSE เมื่อแตะ SL  
+    else if autoCloseOnSL and (longSLHit or shortSLHit)
+        if lastSignal != "CLOSE_SL" or bar_index != lastSignalBar
+            alert(json_signal("CLOSE", currentPair, "market", botToken), alert.freq_once_per_bar_close)
+            lastSignal := "CLOSE_SL"
+            lastSignalBar := bar_index
+            if showWebhookSignals
+                label.new(bar_index, low, "🛑 SL CLOSE", style=label.style_label_up, color=color.red, textcolor=color.white, size=size.small)
+
+    // ส่งสัญญาณ BUY/LONG (เช็ค allowTrade ถ้าเปิดใช้ regime detection)
+    else if buy and inRange and allowTrade
+        if lastSignal != "BUY" or bar_index != lastSignalBar
+            alert(json_signal("BUY", currentPair, "market", botToken), alert.freq_once_per_bar_close)
+            lastSignal := "BUY"
+            lastSignalBar := bar_index
+            if showWebhookSignals
+                label.new(bar_index, low, "📈 BUY", style=label.style_label_up, color=color.green, textcolor=color.white, size=size.small)
+
+    // ส่งสัญญาณ SELL/SHORT (เช็ค allowTrade ถ้าเปิดใช้ regime detection)
+    else if sell and inRange and allowTrade
+        if lastSignal != "SELL" or bar_index != lastSignalBar
+            alert(json_signal("SELL", currentPair, "market", botToken), alert.freq_once_per_bar_close)
+            lastSignal := "SELL"
+            lastSignalBar := bar_index
+            if showWebhookSignals
+                label.new(bar_index, high, "📉 SELL", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+
+// Alert conditions
+alertcondition(buy and inRange and allowTrade,  title="Buy Signal",  message="BUY")
+alertcondition(sell and inRange and allowTrade, title="Sell Signal", message="SELL")
+alertcondition(longTrailingHit or shortTrailingHit, title="Trailing Stop Hit", message="Trailing Stop Hit")

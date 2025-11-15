@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Trading Bot Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { 
+      font-family: 'Inter', sans-serif; 
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    /* Mobile optimizations */
+    @media (max-width: 768px) {
+      .mobile-scroll {
+        -webkit-overflow-scrolling: touch;
+      }
+      
+      .mobile-tap {
+        -webkit-tap-highlight-color: transparent;
+      }
+      
+      /* Fix for iOS Safari viewport issues */
+      .mobile-vh {
+        height: 100vh;
+        height: -webkit-fill-available;
+      }
+    }
+    
+    /* Custom scrollbar for mobile */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: #c1c1c1;
+      border-radius: 2px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: #a1a1a1;
+    }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root">
+    <div class="flex items-center justify-center min-h-screen">
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-teal-500"></div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
